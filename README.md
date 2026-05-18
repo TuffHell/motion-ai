@@ -24,13 +24,13 @@ hemiparesis, spastic, parkinsonian, cerebellar ataxic).
 ## Deployment
 
 This repo is ready for [Streamlit Community Cloud](https://share.streamlit.io).
-Main entry point: **`app2.py`**.
+Main entry point: **`streamlit_app.py`**.
 
 ### Local run
 
 ```bash
 pip install -r requirements.txt
-streamlit run app2.py
+streamlit run streamlit_app.py
 ```
 
 ### Retrain the model
@@ -46,7 +46,7 @@ Outputs `stroke_model_v2.h5`, `motion_multiclass.h5`, `scaler_v2.save`,
 
 | File | Purpose |
 | --- | --- |
-| `app2.py` | Streamlit dashboard (entry point) |
+| `streamlit_app.py` | Streamlit dashboard (entry point) |
 | `gait_sim.py` | Core gait simulator and 24-channel feature engineering |
 | `scenarios.py` | Long-form scenarios, skeleton renderer, clinical metrics, saliency |
 | `train_model.py` | End-to-end training script |
