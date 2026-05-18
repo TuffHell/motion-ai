@@ -309,13 +309,16 @@ def _hash_inputs(*arrays):
 @st.cache_data(show_spinner="🎬 Rendering cinematic gait video…")
 def render_cinematic_gif(patient_raw_bytes, twin_raw_bytes,
                           anom_bytes, alert_after, sensor_saliency_bytes,
-                          n_frames, hash_key, fps=15):
+                          n_frames, hash_key, fps=None):
     """Render the looping cinematic GIF. Cached by hash_key.
 
-    Performance-tuned for Streamlit Cloud's 1 GB CPU-only VM: input frames
-    are subsampled to a target of ~30, figure DPI is dropped, and the floor
-    reflection is removed — keeps the cinematic look but cuts render time
-    from ~20s locally to ~3-5s locally, ~10-15s on Cloud."""
+    Frame-rate is auto-computed so playback runs at real-walking speed:
+    the simulator uses dt = 0.075 s per frame (~13 Hz), so showing the
+    subsampled frames at the matching effective rate keeps the rendered
+    cadence biologically realistic. (If you previously saw the walker
+    flying along, that was 32 frames at 15 fps = ~2 s playback for 6 s
+    of simulated walking — 3x too fast.)
+    """
     AMP_Y = 1.6  # forward-back swing exaggeration
     AMP_Z = 1.5  # vertical (foot-lift / wrist-bob) exaggeration
     # decode bytes → arrays
@@ -324,8 +327,10 @@ def render_cinematic_gif(patient_raw_bytes, twin_raw_bytes,
     anom        = np.frombuffer(anom_bytes,        dtype=np.float64).reshape(n_frames, 4)
     sensor_sal  = (np.frombuffer(sensor_saliency_bytes, dtype=np.float64)
                    if sensor_saliency_bytes else None)
-    # SUBSAMPLE: cap at 32 rendered frames to keep render time bounded
-    TARGET_FRAMES = 32
+    # SUBSAMPLE: cap at 48 rendered frames to keep render time bounded
+    DT_SIM = 0.075
+    sim_duration = n_frames * DT_SIM  # seconds of real walking in the data
+    TARGET_FRAMES = 48
     if n_frames > TARGET_FRAMES:
         stride = max(1, n_frames // TARGET_FRAMES)
         idx = np.arange(0, n_frames, stride)[:TARGET_FRAMES]
@@ -333,9 +338,11 @@ def render_cinematic_gif(patient_raw_bytes, twin_raw_bytes,
         twin_raw = twin_raw[idx]
         anom = anom[idx]
         if alert_after is not None:
-            # remap alert frame to subsampled index space
             alert_after = int(np.searchsorted(idx, alert_after))
         n_frames = len(idx)
+    # Auto-tune fps so playback duration equals simulated duration (real time)
+    if fps is None:
+        fps = max(6, min(15, int(round(n_frames / sim_duration))))
     # visual amplification: subtract mean, scale, add back. Affects only
     # the rendered position — model already saw the original signal.
     for raw_arr in (patient_raw, twin_raw):
@@ -637,7 +644,7 @@ def render_cinematic_gif(patient_raw_bytes, twin_raw_bytes,
 
 
 def render_scene_gif_for(patient_raw, twin_raw, anom, alert_after,
-                          sensor_saliency=None, fps=24):
+                          sensor_saliency=None, fps=None):
     """Wrapper that hashes the inputs and calls the cached GIF renderer."""
     patient_raw = np.ascontiguousarray(patient_raw, dtype=np.float64)
     twin_raw    = np.ascontiguousarray(twin_raw,    dtype=np.float64)
@@ -648,7 +655,7 @@ def render_scene_gif_for(patient_raw, twin_raw, anom, alert_after,
                                           dtype=np.float64).tobytes()
     key = _hash_inputs(patient_raw, twin_raw, anom,
                         np.asarray([alert_after if alert_after is not None else -1,
-                                     fps], dtype=np.int64),
+                                     fps if fps is not None else -1], dtype=np.int64),
                         np.frombuffer(sal_bytes, dtype=np.float64)
                         if sal_bytes else np.array([0.0]))
     return render_cinematic_gif(patient_raw.tobytes(),
@@ -991,7 +998,7 @@ with tabs[0]:
         with c1:
             st.subheader(f"🎬 Cinematic gait — {PROFILE_LABELS[profile]}")
             gif_bytes = render_scene_gif_for(raw, twin_raw, anom,
-                                              alert_after=None, fps=24)
+                                              alert_after=None, fps=None)
             st.image(gif_bytes, use_container_width=True)
             st.caption("Cinematic 2-D sagittal projection — the standard "
                        "clinical gait-lab view. **Right** = patient · "
@@ -1140,7 +1147,7 @@ with tabs[2]:
     with left:
         gif_bytes = render_scene_gif_for(
             raw, twin_raw, anom,
-            alert_after=alert, sensor_saliency=per_sensor_sal, fps=24)
+            alert_after=alert, sensor_saliency=per_sensor_sal, fps=None)
         st.image(gif_bytes, use_container_width=True)
         st.plotly_chart(build_brain_panel(
             brain_full, prob_curve=probs, prob_centers=centers,
@@ -1352,7 +1359,7 @@ with tabs[3]:
                         "(your custom subject vs healthy reference):")
             sb_gif = render_scene_gif_for(raw_sb, twin_sb_raw, anom_sb,
                 alert_after=(0 if p_sb > 0.5 else None),
-                sensor_saliency=None, fps=20)
+                sensor_saliency=None, fps=None)
             st.image(sb_gif, use_container_width=True)
 
     # ============== SWEEP ====================================
