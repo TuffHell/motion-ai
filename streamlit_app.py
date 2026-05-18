@@ -313,36 +313,54 @@ def render_cinematic_gif(patient_raw_bytes, twin_raw_bytes,
     """Render the looping cinematic GIF. Cached by hash_key.
 
     Frame-rate is auto-computed so playback runs at real-walking speed:
-    the simulator uses dt = 0.075 s per frame (~13 Hz), so showing the
-    subsampled frames at the matching effective rate keeps the rendered
-    cadence biologically realistic. (If you previously saw the walker
-    flying along, that was 32 frames at 15 fps = ~2 s playback for 6 s
-    of simulated walking — 3x too fast.)
+    the simulator uses dt = 0.075 s per frame (~13 Hz). We linearly
+    interpolate the input frames to 1.5x density for buttery-smooth
+    playback at biologically realistic cadence.
     """
-    AMP_Y = 1.6  # forward-back swing exaggeration
-    AMP_Z = 1.5  # vertical (foot-lift / wrist-bob) exaggeration
+    # Heavier visual amplification — affected limbs nearly stop moving,
+    # foot drop is dramatic, tremor jumps out. AI still sees the original
+    # un-amplified stream so accuracy is unaffected.
+    AMP_Y = 2.2  # forward-back swing exaggeration
+    AMP_Z = 2.0  # vertical (foot-lift / wrist-bob) exaggeration
     # decode bytes → arrays
     patient_raw = np.frombuffer(patient_raw_bytes, dtype=np.float64).reshape(n_frames, 12).copy()
     twin_raw    = np.frombuffer(twin_raw_bytes,    dtype=np.float64).reshape(n_frames, 12).copy()
     anom        = np.frombuffer(anom_bytes,        dtype=np.float64).reshape(n_frames, 4)
     sensor_sal  = (np.frombuffer(sensor_saliency_bytes, dtype=np.float64)
                    if sensor_saliency_bytes else None)
-    # SUBSAMPLE: cap at 48 rendered frames to keep render time bounded
     DT_SIM = 0.075
     sim_duration = n_frames * DT_SIM  # seconds of real walking in the data
-    TARGET_FRAMES = 48
-    if n_frames > TARGET_FRAMES:
-        stride = max(1, n_frames // TARGET_FRAMES)
-        idx = np.arange(0, n_frames, stride)[:TARGET_FRAMES]
-        patient_raw = patient_raw[idx]
-        twin_raw = twin_raw[idx]
-        anom = anom[idx]
+    # SMOOTH: tween-interpolate the input arrays to 1.5x density (e.g. 80 -> 120
+    # frames). Each pair of original frames gets one extra interpolated frame
+    # between them, halving the visual step size and making the rendered motion
+    # buttery-smooth. The model only ever saw the original frames; this purely
+    # affects what the GIF looks like.
+    UPSAMPLE = 1.5
+    target_n = int(n_frames * UPSAMPLE)
+    src_idx = np.linspace(0, n_frames - 1, target_n)
+    def _interp(arr):
+        out = np.empty((target_n, arr.shape[1]), dtype=arr.dtype)
+        for ch in range(arr.shape[1]):
+            out[:, ch] = np.interp(src_idx, np.arange(n_frames), arr[:, ch])
+        return out
+    patient_raw = _interp(patient_raw)
+    twin_raw = _interp(twin_raw)
+    anom = _interp(anom)
+    if alert_after is not None:
+        alert_after = int(round(alert_after * UPSAMPLE))
+    n_frames = target_n
+    # CAP for render time (after upsampling, take every Nth if too many)
+    MAX_RENDER = 96
+    if n_frames > MAX_RENDER:
+        stride = max(1, n_frames // MAX_RENDER)
+        idx = np.arange(0, n_frames, stride)[:MAX_RENDER]
+        patient_raw = patient_raw[idx]; twin_raw = twin_raw[idx]; anom = anom[idx]
         if alert_after is not None:
             alert_after = int(np.searchsorted(idx, alert_after))
         n_frames = len(idx)
     # Auto-tune fps so playback duration equals simulated duration (real time)
     if fps is None:
-        fps = max(6, min(15, int(round(n_frames / sim_duration))))
+        fps = max(8, min(20, int(round(n_frames / sim_duration))))
     # visual amplification: subtract mean, scale, add back. Affects only
     # the rendered position — model already saw the original signal.
     for raw_arr in (patient_raw, twin_raw):
